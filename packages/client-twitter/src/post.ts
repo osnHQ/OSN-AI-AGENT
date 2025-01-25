@@ -27,6 +27,7 @@ import {
 } from "discord.js";
 import { State } from "@elizaos/core";
 import { ActionResponse } from "@elizaos/core";
+import fs from "fs";
 
 const MAX_TIMELINES_TO_FETCH = 15;
 
@@ -277,6 +278,7 @@ export class TwitterPostClient {
         // Only start tweet generation loop if not in dry run mode
         generateNewTweetLoop();
         elizaLogger.log("Tweet generation loop started");
+        this.generateNewTweet();
 
         if (this.client.twitterConfig.ENABLE_ACTION_PROCESSING) {
             processActionsLoop().catch((error) => {
@@ -495,11 +497,33 @@ export class TwitterPostClient {
                     twitterPostTemplate,
             });
 
-            elizaLogger.debug("generate post prompt:\n" + context);
+            elizaLogger.log("generated post prompt:\n" + context);
+
+            elizaLogger.log("Starting to read data from tweets csv file...");
+            const TWEETS_FILE = "/root/brokie-ai-agent/tweets.csv";
+
+            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only \n \n ";
+
+            if (fs.existsSync(TWEETS_FILE)) {
+                const fileContent = fs.readFileSync(TWEETS_FILE, "utf-8");
+                elizaLogger.log(fileContent);
+                str += fileContent;
+
+                // Clean the file after reading
+                try {
+                    // fs.writeFileSync(TWEETS_FILE, '', 'utf-8');
+                    elizaLogger.log("Cleaned tweets.csv file for new content");
+                } catch (error) {
+                    elizaLogger.error("Error cleaning tweets.csv:", error);
+                }
+            }
+
+            elizaLogger.log(str);
+            const newContext = str + "\n" + context;
 
             const newTweetContent = await generateText({
                 runtime: this.runtime,
-                context,
+                context: newContext,
                 modelClass: ModelClass.SMALL,
             });
 
