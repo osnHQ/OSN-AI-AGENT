@@ -490,15 +490,6 @@ export class TwitterPostClient {
                 }
             );
 
-            const context = composeContext({
-                state,
-                template:
-                    this.runtime.character.templates?.twitterPostTemplate ||
-                    twitterPostTemplate,
-            });
-
-            elizaLogger.log("generated post prompt:\n" + context);
-
             elizaLogger.log("Starting to read data from tweets csv file...");
             const TWEETS_FILE = "/root/brokie-ai-agent/tweets.csv";
 
@@ -519,7 +510,10 @@ export class TwitterPostClient {
             }
 
             elizaLogger.log(str);
-            const newContext = str + "\n" + context;
+            const character = "Below is BrokieInu Twitter Profile Character: \n"+this.runtime.character;
+            const newContext = character + "\n" + str;
+            elizaLogger.warn("New context:");
+            elizaLogger.warn(newContext);
 
             const newTweetContent = await generateText({
                 runtime: this.runtime,
