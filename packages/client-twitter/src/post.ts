@@ -278,7 +278,6 @@ export class TwitterPostClient {
         // Only start tweet generation loop if not in dry run mode
         generateNewTweetLoop();
         elizaLogger.log("Tweet generation loop started");
-        this.generateNewTweet();
 
         if (this.client.twitterConfig.ENABLE_ACTION_PROCESSING) {
             processActionsLoop().catch((error) => {
@@ -493,7 +492,7 @@ export class TwitterPostClient {
             elizaLogger.log("Starting to read data from tweets csv file...");
             const TWEETS_FILE = "/root/brokie-ai-agent/tweets.csv";
 
-            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only \n \n ";
+            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only using postExamples key of Character below. The total character count MUST be less than 280 characters. Use \\n\\n (double spaces) between statements. \n \n ";
 
             if (fs.existsSync(TWEETS_FILE)) {
                 const fileContent = fs.readFileSync(TWEETS_FILE, "utf-8");
@@ -508,9 +507,12 @@ export class TwitterPostClient {
                     elizaLogger.error("Error cleaning tweets.csv:", error);
                 }
             }
-
+            //this.runtime.character - fetch key from there to remove hardcode
             elizaLogger.log(str);
-            const character = "Below is BrokieInu Twitter Profile Character: \n"+this.runtime.character;
+            let character = "Below is BrokieInu Twitter Profile Character: \n";
+            character+='"name": "Brokie Inu AI"'+"\n";
+            character+='"bio": Degenerate Advisor Extraordinaire: Specializing in meme coins, AI-driven crypto projects, and early-stage gems, No-BS Analysis: Whether a token’s primed for Valhalla or destined to rug, Brokie Inu AI delivers brutally honest, foul-mouthed takes.,Risk Management Guru: Warns you when you arere about to YOLO into a scam, roast included, free of charge.'+"\n";
+            character+='"postExamples": "Diversify or cry—it’s your call, degens, This presale is hotter than my morning turds after Taco Tuesday. Don’t miss it., Congrats, you just bought the top. Again., If a dev can’t even spell their token name right, why are you YOLO’ing into their project?, This token has more red flags than a bullfight. Ole!"'+'\n'
             const newContext = character + "\n" + str;
             elizaLogger.warn("New context:");
             elizaLogger.warn(newContext);
@@ -520,6 +522,8 @@ export class TwitterPostClient {
                 context: newContext,
                 modelClass: ModelClass.SMALL,
             });
+            elizaLogger.warn("New tweet content:");
+            elizaLogger.warn(newTweetContent);
 
             // First attempt to clean content
             let cleanedContent = "";
