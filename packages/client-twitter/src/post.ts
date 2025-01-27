@@ -492,9 +492,30 @@ export class TwitterPostClient {
             elizaLogger.log("Starting to read data from tweets csv file...");
             const TWEETS_FILE = "/root/brokie-ai-agent/tweets.csv";
 
-            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only using postExamples key of Character below. The total character count MUST be less than 280 characters. Use \\n\\n (double spaces) between statements. \n \n ";
+            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only using postExamples key of Character below. Give more preference to latest tweets. The total character count MUST be less than 280 characters. Use \\n\\n (double spaces) between statements. \n \n ";
 
-            if (fs.existsSync(TWEETS_FILE)) {
+            const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+            const twitterIds = ["1852674305517342720", "1860974861608488960", "1863391144169893888", "1872729066593308672", "1852623328131112960", "1863342718954655744", "1858913037278670848"]; // Add more Twitter IDs to this array as needed
+
+            for (const id of twitterIds) {
+                const posts = await this.client.fetchUserPosts(id, 4); // Fetch 10 posts since that's the minimum
+                // Take only the 3 most recent posts (posts are already sorted by recency)
+                const recentPosts = posts.slice(0, 3);
+
+                recentPosts.forEach(tweet => {
+                    str = str + "@" + tweet.username + " at UTC time " + tweet.timestamp + ": " + (tweet.text ?? tweet.legacy?.full_text) + "\n";
+                });
+
+                if (id !== twitterIds[twitterIds.length - 1]) {
+                    await sleep(2000); // Wait 2 seconds before fetching next user's posts
+                }
+            }
+
+            elizaLogger.log(str);
+
+
+            /*if (fs.existsSync(TWEETS_FILE)) {
                 const fileContent = fs.readFileSync(TWEETS_FILE, "utf-8");
                 elizaLogger.log(fileContent);
                 str += fileContent;
@@ -508,7 +529,7 @@ export class TwitterPostClient {
                 }
             }
             //this.runtime.character - fetch key from there to remove hardcode
-            elizaLogger.log(str);
+            elizaLogger.log(str);*/
             let character = "Below is BrokieInu Twitter Profile Character: \n";
             character+='"name": "Brokie Inu AI"'+"\n";
             character+='"bio": Degenerate Advisor Extraordinaire: Specializing in meme coins, AI-driven crypto projects, and early-stage gems, No-BS Analysis: Whether a token’s primed for Valhalla or destined to rug, Brokie Inu AI delivers brutally honest, foul-mouthed takes.,Risk Management Guru: Warns you when you arere about to YOLO into a scam, roast included, free of charge.'+"\n";
