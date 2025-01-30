@@ -28,6 +28,9 @@ import {
 import { State } from "@elizaos/core";
 import { ActionResponse } from "@elizaos/core";
 import fs from "fs";
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import * as path from 'path';
 
 const MAX_TIMELINES_TO_FETCH = 15;
 
@@ -488,61 +491,39 @@ export class TwitterPostClient {
                     twitterUserName: this.client.profile.username,
                 }
             );
+            elizaLogger.warn("Get Open Source: ");
+            let osn = await getOpenSource();
+            elizaLogger.warn(osn);
+            elizaLogger.warn(osn.url);
+            elizaLogger.warn(osn.desc);
+            elizaLogger.warn(osn.readmetxt);
 
-            elizaLogger.log("Starting to read data from tweets csv file...");
-            const TWEETS_FILE = "/root/brokie-ai-agent/tweets.csv";
+            let str = osn.desc + "\n" + osn.readmetxt + "\n";
+            str = str + "You've to create a tweet for this open source using OSN character profile mentioning why its interesting. The total character count MUST be less than 200 characters. Use \\n\\n (double spaces) between statements. \n \n ";
 
-            let str = "Below are important tweets to read. You've to create important new information tweet backed with a news from these tweets only using postExamples key of Character below. Give more preference to latest tweets. The total character count MUST be less than 280 characters. Use \\n\\n (double spaces) between statements. \n \n ";
+            const openSourceMessages = [
+                "Open Source isn't just the future—it's the present! The biggest innovations today are built collaboratively. Are you contributing?",
+                "The power of Open Source: Linux runs 96.3% of the world’s top 1 million web servers. That’s the impact of collaborative development!",
+                "You use Open Source every day—your browser, your phone, even the AI tools you love. It's time to give back to the community!",
+                "The best developers in the world contribute to Open Source. Want to grow your skills and get noticed? Start contributing today!",
+                "Every tech company relies on Open Source. The difference is, some admit it—and some don’t. 😉",
+                "Open Source is changing how AI is built. Open models like Llama 2, Whisper, and Stable Diffusion prove that innovation belongs to everyone!",
+                "Open Source is about freedom, collaboration, and pushing technology forward. The best part? Anyone can be part of it. Start today!"
+            ];
 
-            const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-            const twitterIds = ["1852674305517342720", "1860974861608488960", "1863391144169893888", "1872729066593308672", "1852623328131112960", "1863342718954655744", "1858913037278670848"]; // Add more Twitter IDs to this array as needed
-
-            for (const id of twitterIds) {
-                const posts = await this.client.fetchUserPosts(id, 4); // Fetch 10 posts since that's the minimum
-                // Take only the 3 most recent posts (posts are already sorted by recency)
-                const recentPosts = posts.slice(0, 3);
-
-                recentPosts.forEach(tweet => {
-                    str = str + "@" + tweet.username + " at UTC time " + tweet.timestamp + ": " + (tweet.text ?? tweet.legacy?.full_text) + "\n";
-                });
-
-                if (id !== twitterIds[twitterIds.length - 1]) {
-                    await sleep(2000); // Wait 2 seconds before fetching next user's posts
-                }
-            }
-
-            elizaLogger.log(str);
-
-
-            /*if (fs.existsSync(TWEETS_FILE)) {
-                const fileContent = fs.readFileSync(TWEETS_FILE, "utf-8");
-                elizaLogger.log(fileContent);
-                str += fileContent;
-
-                // Clean the file after reading
-                try {
-                    // fs.writeFileSync(TWEETS_FILE, '', 'utf-8');
-                    elizaLogger.log("Cleaned tweets.csv file for new content");
-                } catch (error) {
-                    elizaLogger.error("Error cleaning tweets.csv:", error);
-                }
-            }
-            //this.runtime.character - fetch key from there to remove hardcode
-            elizaLogger.log(str);*/
-            let character = "Below is BrokieInu Twitter Profile Character: \n";
-            character+='"name": "Brokie Inu AI"'+"\n";
-            character+='"bio": Degenerate Advisor Extraordinaire: Specializing in meme coins, AI-driven crypto projects, and early-stage gems, No-BS Analysis: Whether a token’s primed for Valhalla or destined to rug, Brokie Inu AI delivers brutally honest, foul-mouthed takes.,Risk Management Guru: Warns you when you arere about to YOLO into a scam, roast included, free of charge.'+"\n";
-            character+='"postExamples": "Diversify or cry—it’s your call, degens, This presale is hotter than my morning turds after Taco Tuesday. Don’t miss it., Congrats, you just bought the top. Again., If a dev can’t even spell their token name right, why are you YOLO’ing into their project?, This token has more red flags than a bullfight. Ole!"'+'\n'
+            let character = "Below is OSN Twitter Profile Character: \n";
+            character+='"name": "OSN"'+"\n";
+            character+='"bio": OSN is a global community of crypto enthusiasts, investors, and builders. We are here to help you navigate the crypto landscape and make informed decisions. Join us in our mission to empower individuals and businesses with the knowledge and tools they need to succeed in the digital asset world. Let’s build a brighter future together!"'+"\n";
+            character+='Post Examples: \n';
+            character+=openSourceMessages.join("\n");
             const newContext = character + "\n" + str;
-            elizaLogger.warn("New context:");
-            elizaLogger.warn(newContext);
 
-            const newTweetContent = await generateText({
+            let newTweetContent = await generateText({
                 runtime: this.runtime,
                 context: newContext,
                 modelClass: ModelClass.SMALL,
             });
+            newTweetContent+="\n"+osn.url;
             elizaLogger.warn("New tweet content:");
             elizaLogger.warn(newTweetContent);
 
@@ -1491,4 +1472,49 @@ export class TwitterPostClient {
             }
         }
     }
+}
+
+async function getOpenSource(): Promise<{ url: string; desc: string, readmetxt: string }> {
+    const HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:11.0) Gecko/20100101 Firefox/11.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Encoding': 'gzip,deflate,sdch',
+        'Accept-Language': 'en-EN'
+    };
+
+    const url = 'https://github.com/trending';
+    const coveredFile = '/root/osn-ai-agent/osncovered.txt';
+
+    // Read already covered repositories
+    let coveredRepos: string[] = [];
+    if (fs.existsSync(coveredFile)) {
+        coveredRepos = fs.readFileSync(coveredFile, 'utf-8')
+            .split('\n')
+            .filter(line => line.trim() !== '');
+    }
+
+    // Fetch trending repositories
+    const response = await axios.get(url, { headers: HEADERS });
+    const $ = cheerio.load(response.data);
+    const items = $('article.Box-row');
+    elizaLogger.warn(items.length);
+
+    // Find first repository that hasn't been covered
+    for (let i = 0; i < items.length; i++) {
+        let urlvan = $(items[i]).find('.lh-condensed a').attr('href');
+        const url = "https://github.com" + urlvan;
+        let desc = $(items[i]).find('p.col-9').text().trim();
+        elizaLogger.warn(url);
+        elizaLogger.warn(desc);
+        const readme = await axios.get(url, { headers: HEADERS });
+        if (!coveredRepos.includes(url)) {
+            // Add to covered repositories
+            fs.appendFileSync(coveredFile, url + '\n');
+            const readme = await axios.get("https://raw.githubusercontent.com"+urlvan+"/refs/heads/main/README.md", { headers: HEADERS });
+            return { url, desc, readmetxt: readme.data };
+        }
+    }
+
+    // If all repositories are covered, throw error
+    throw new Error('All repositories are covered');
 }

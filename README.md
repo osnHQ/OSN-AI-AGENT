@@ -1,4 +1,12 @@
-# Eliza 🤖
+# OSN AI AGENT 🤖
+
+<div align="center">
+  This project is built on top of ELIZA, enhancing its capabilities for modern applications. To explore trending repositories on GitHub and gain insights.
+</div>
+
+<div align="center">
+  The ELIZA README is pasted below.
+</div>
 
 <div align="center">
   <img src="./docs/static/img/eliza_banner.jpg" alt="Eliza Banner" width="100%" />

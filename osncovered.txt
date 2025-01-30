@@ -1,0 +1,7 @@
+https://github.com/deepseek-ai/Janus
+https://github.com/deepseek-ai/DeepSeek-Coder
+https://github.com/deepseek-ai/DeepSeek-LLM
+https://github.com/deepseek-ai/awesome-deepseek-integration
+https://github.com/deepseek-ai/DeepSeek-Coder-V2
+https://github.com/open-webui/open-webui
+https://github.com/ggerganov/llama.cpp
