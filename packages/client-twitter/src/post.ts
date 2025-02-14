@@ -31,6 +31,7 @@ import fs from "fs";
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import * as path from 'path';
+import { dpsnService } from './dpsn-service';
 
 const MAX_TIMELINES_TO_FETCH = 15;
 
@@ -1477,13 +1478,10 @@ export class TwitterPostClient {
 async function getOpenSource(): Promise<{ url: string; desc: string, readmetxt: string }> {
     const HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:11.0) Gecko/20100101 Firefox/11.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Encoding': 'gzip,deflate,sdch',
-        'Accept-Language': 'en-EN'
     };
 
-    const url = 'https://github.com/trending';
     const coveredFile = '/root/osn-ai-agent/osncovered.txt';
+    const GITHUB_TOPIC_HASH = "0xe5300b36813400e3d9efc72e094a9327e1ac12fb98b3ddc76be34284d3799796";
 
     // Read already covered repositories
     let coveredRepos: string[] = [];
@@ -1493,28 +1491,57 @@ async function getOpenSource(): Promise<{ url: string; desc: string, readmetxt: 
             .filter(line => line.trim() !== '');
     }
 
-    // Fetch trending repositories
-    const response = await axios.get(url, { headers: HEADERS });
-    const $ = cheerio.load(response.data);
-    const items = $('article.Box-row');
-    elizaLogger.warn(items.length);
+    try {
+        // Initialize DPSN and subscribe to GitHub topic
+        await dpsnService.init();
 
-    // Find first repository that hasn't been covered
-    for (let i = 0; i < items.length; i++) {
-        let urlvan = $(items[i]).find('.lh-condensed a').attr('href');
-        const url = "https://github.com" + urlvan;
-        let desc = $(items[i]).find('p.col-9').text().trim();
-        elizaLogger.warn(url);
-        elizaLogger.warn(desc);
-        const readme = await axios.get(url, { headers: HEADERS });
-        if (!coveredRepos.includes(url)) {
-            // Add to covered repositories
-            fs.appendFileSync(coveredFile, url + '\n');
-            const readme = await axios.get("https://raw.githubusercontent.com"+urlvan+"/refs/heads/main/README.md", { headers: HEADERS });
-            return { url, desc, readmetxt: readme.data };
-        }
+        // Subscribe to DPSN and get repositories
+        return new Promise((resolve, reject) => {
+            dpsnService.subscribe(GITHUB_TOPIC_HASH, async (topic, message, packet) => {
+                try {
+                    const repositories = Array.isArray(message) ? message : [message];
+                    elizaLogger.warn(`Received ${repositories.length} repositories from DPSN`);
+
+                    // Find first repository that hasn't been covered
+                    for (const repo of repositories) {
+                        if (!repo.url || !repo.url.startsWith('https://github.com/')) continue;
+
+                        const url = repo.url;
+                        if (!coveredRepos.includes(url)) {
+                            // Add to covered repositories
+                            fs.appendFileSync(coveredFile, url + '\n');
+
+                            try {
+                                const urlParts = url.replace('https://github.com/', '').split('/');
+                                const readmeUrl = `https://raw.githubusercontent.com/${urlParts[0]}/${urlParts[1]}/main/README.md`;
+                                const readmeResponse = await axios.get(readmeUrl, { headers: HEADERS });
+
+                                resolve({
+                                    url,
+                                    desc: repo.description || '',
+                                    readmetxt: readmeResponse.data
+                                });
+                                return;
+                            } catch (error) {
+                                elizaLogger.error(`Failed to fetch README for ${url}: ${error}`);
+                                resolve({
+                                    url,
+                                    desc: repo.description || '',
+                                    readmetxt: 'README not available'
+                                });
+                                return;
+                            }
+                        }
+                    }
+
+                    reject(new Error('All repositories are covered'));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+    } catch (error) {
+        elizaLogger.error(`Error in getOpenSource: ${error}`);
+        throw error;
     }
-
-    // If all repositories are covered, throw error
-    throw new Error('All repositories are covered');
 }
