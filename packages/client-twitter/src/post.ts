@@ -106,6 +106,7 @@ export class TwitterPostClient {
     private approvalRequired: boolean = false;
     private discordApprovalChannelId: string;
     private approvalCheckInterval: number;
+    private isGeneratingTweet = false;
 
     constructor(client: ClientBase, runtime: IAgentRuntime) {
         this.client = client;
@@ -220,70 +221,97 @@ export class TwitterPostClient {
             await this.client.init();
         }
 
-        const generateNewTweetLoop = async () => {
-            // Check for pending tweets first
-            if (this.approvalRequired) await this.handlePendingTweet();
+        // Initialize DPSN
+        await dpsnService.init();
 
-            const lastPost = await this.runtime.cacheManager.get<{
-                timestamp: number;
-            }>("twitter/" + this.twitterUsername + "/lastPost");
-
-            const lastPostTimestamp = lastPost?.timestamp ?? 0;
-            const minMinutes = this.client.twitterConfig.POST_INTERVAL_MIN;
-            const maxMinutes = this.client.twitterConfig.POST_INTERVAL_MAX;
-            const randomMinutes =
-                Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) +
-                minMinutes;
-            const delay = randomMinutes * 60 * 1000;
-
-            if (Date.now() > lastPostTimestamp + delay) {
-                await this.generateNewTweet();
-            }
-
-            setTimeout(() => {
-                generateNewTweetLoop(); // Set up next iteration
-            }, delay);
-
-            elizaLogger.log(`Next tweet scheduled in ${randomMinutes} minutes`);
+        // Headers for GitHub API requests
+        const HEADERS = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:11.0) Gecko/20100101 Firefox/11.0',
         };
 
-        const processActionsLoop = async () => {
-            const actionInterval = this.client.twitterConfig.ACTION_INTERVAL; // Defaults to 5 minutes
+        // Start DPSN subscription for GitHub topic
+        const GITHUB_TOPIC_HASH = "0xe5300b36813400e3d9efc72e094a9327e1ac12fb98b3ddc76be34284d3799796";
+        dpsnService.subscribe(GITHUB_TOPIC_HASH, async (topic, message, packet) => {
+            try {
+                const repositories = Array.isArray(message) ? message : [message];
+                elizaLogger.warn(`Received ${repositories.length} repositories from DPSN`);
 
-            while (!this.stopProcessingActions) {
-                try {
-                    const results = await this.processTweetActions();
-                    if (results) {
-                        elizaLogger.log(`Processed ${results.length} tweets`);
-                        elizaLogger.log(
-                            `Next action processing scheduled in ${actionInterval} minutes`
-                        );
-                        // Wait for the full interval before next processing
-                        await new Promise(
-                            (resolve) =>
-                                setTimeout(resolve, actionInterval * 60 * 1000) // now in minutes
-                        );
+                // Process each repository
+                for (const repo of repositories) {
+                    if (!repo.url || !repo.url.startsWith('https://github.com/')) {
+                        elizaLogger.warn(`Skipping invalid repository URL: ${repo.url}`);
+                        continue;
                     }
-                } catch (error) {
-                    elizaLogger.error(
-                        "Error in action processing loop:",
-                        error
-                    );
-                    // Add exponential backoff on error
-                    await new Promise((resolve) => setTimeout(resolve, 30000)); // Wait 30s on error
+
+                    try {
+                        elizaLogger.log(`Processing repository: ${repo.url}`);
+                        // Get repository details
+                        const isNew = await this.processRepository(repo);
+                        elizaLogger.log(`Repository ${repo.url} is ${isNew ? 'new' : 'already processed'}`);
+
+                        if (isNew) {
+                            // Get README content
+                            let readmeContent = 'README not available';
+                            try {
+                                const urlParts = repo.url.replace('https://github.com/', '').split('/');
+                                const readmeUrl = `https://raw.githubusercontent.com/${urlParts[0]}/${urlParts[1]}/main/README.md`;
+                                elizaLogger.log(`Fetching README from: ${readmeUrl}`);
+                                const readmeResponse = await axios.get(readmeUrl, { headers: HEADERS });
+                                readmeContent = readmeResponse.data;
+                                elizaLogger.log('Successfully fetched README content');
+                            } catch (error) {
+                                elizaLogger.error(`Failed to fetch README for ${repo.url}: ${error}`);
+                            }
+
+                            // Generate and post tweet immediately with repository data
+                            elizaLogger.log('Attempting to generate tweet for repository');
+                            await this.generateNewTweet({
+                                url: repo.url,
+                                desc: repo.description || '',
+                                readmetxt: readmeContent
+                            });
+                            elizaLogger.log('Tweet generation attempt completed');
+                            break; // Process one repo at a time
+                        }
+                    } catch (error) {
+                        elizaLogger.error(`Error processing repository: ${error}`);
+                    }
                 }
+            } catch (error) {
+                elizaLogger.error("Error handling DPSN data:", error);
             }
-        };
+        });
 
-        if (this.client.twitterConfig.POST_IMMEDIATELY) {
-            await this.generateNewTweet();
-        }
-
-        // Only start tweet generation loop if not in dry run mode
-        generateNewTweetLoop();
-        elizaLogger.log("Tweet generation loop started");
-
+        // Only start action processing loop if enabled
         if (this.client.twitterConfig.ENABLE_ACTION_PROCESSING) {
+            const processActionsLoop = async () => {
+                const actionInterval = this.client.twitterConfig.ACTION_INTERVAL; // Defaults to 5 minutes
+
+                while (!this.stopProcessingActions) {
+                    try {
+                        const results = await this.processTweetActions();
+                        if (results) {
+                            elizaLogger.log(`Processed ${results.length} tweets`);
+                            elizaLogger.log(
+                                `Next action processing scheduled in ${actionInterval} minutes`
+                            );
+                            // Wait for the full interval before next processing
+                            await new Promise(
+                                (resolve) =>
+                                    setTimeout(resolve, actionInterval * 60 * 1000) // now in minutes
+                            );
+                        }
+                    } catch (error) {
+                        elizaLogger.error(
+                            "Error in action processing loop:",
+                            error
+                        );
+                        // Add exponential backoff on error
+                        await new Promise((resolve) => setTimeout(resolve, 30000)); // Wait 30s on error
+                    }
+                }
+            };
+
             processActionsLoop().catch((error) => {
                 elizaLogger.error(
                     "Fatal error in process actions loop:",
@@ -292,8 +320,14 @@ export class TwitterPostClient {
             });
         }
 
-        // Start the pending tweet check loop if enabled
-        if (this.approvalRequired) this.runPendingTweetCheckLoop();
+        if (this.client.twitterConfig.POST_IMMEDIATELY) {
+            await this.generateNewTweet();
+        }
+
+        // Start the pending tweet check loop if approval is required
+        if (this.approvalRequired) {
+            this.runPendingTweetCheckLoop();
+        }
     }
 
     private runPendingTweetCheckLoop() {
@@ -462,10 +496,16 @@ export class TwitterPostClient {
     /**
      * Generates and posts a new tweet. If isDryRun is true, only logs what would have been posted.
      */
-    async generateNewTweet() {
-        elizaLogger.log("Generating new tweet");
+    async generateNewTweet(repoData?: { url: string; desc: string, readmetxt: string }) {
+        if (this.isGeneratingTweet) {
+            elizaLogger.warn('Already generating a tweet, skipping...');
+            return;
+        }
 
         try {
+            this.isGeneratingTweet = true;
+            elizaLogger.log("Generating new tweet");
+
             const roomId = stringToUuid(
                 "twitter_generate_room-" + this.client.profile.username
             );
@@ -492,15 +532,15 @@ export class TwitterPostClient {
                     twitterUserName: this.client.profile.username,
                 }
             );
-            elizaLogger.warn("Get Open Source: ");
-            let osn = await getOpenSource();
-            elizaLogger.warn(osn);
-            elizaLogger.warn(osn.url);
-            elizaLogger.warn(osn.desc);
-            elizaLogger.warn(osn.readmetxt);
 
-            let str = osn.desc + "\n" + osn.readmetxt + "\n";
-            str = str + "You've to create a tweet for this open source using OSN character profile mentioning why its interesting. The total character count MUST be less than 200 characters. Use \\n\\n (double spaces) between statements. \n \n ";
+            let str;
+            if (repoData) {
+                str = repoData.desc + "\n" + repoData.readmetxt + "\n";
+            } else {
+                elizaLogger.error("No repository data provided for tweet generation");
+                return;
+            }
+            str = str + "You've to create a tweet for this open source using OSN character profile mentioning why its interesting. The total character count MUST be less than 180 characters. Use \\n\\n (double spaces) between statements. \n \n ";
 
             const openSourceMessages = [
                 "Open Source isn't just the future—it's the present! The biggest innovations today are built collaboratively. Are you contributing?",
@@ -524,7 +564,7 @@ export class TwitterPostClient {
                 context: newContext,
                 modelClass: ModelClass.SMALL,
             });
-            newTweetContent+="\n"+osn.url;
+            newTweetContent+="\n"+repoData.url;
             elizaLogger.warn("New tweet content:");
             elizaLogger.warn(newTweetContent);
 
@@ -599,7 +639,7 @@ export class TwitterPostClient {
                     elizaLogger.log("Tweet sent for approval");
                 } else {
                     elizaLogger.log(`Posting new tweet:\n ${cleanedContent}`);
-                    this.postTweet(
+                    await this.postTweet(
                         this.runtime,
                         this.client,
                         cleanedContent,
@@ -607,12 +647,21 @@ export class TwitterPostClient {
                         newTweetContent,
                         this.twitterUsername
                     );
+                    // Update last post timestamp after successful tweet
+                    await this.runtime.cacheManager.set(
+                        `twitter/${this.twitterUsername}/lastPost`,
+                        {
+                            timestamp: Date.now()
+                        }
+                    );
                 }
             } catch (error) {
                 elizaLogger.error("Error sending tweet:", error);
             }
         } catch (error) {
             elizaLogger.error("Error generating new tweet:", error);
+        } finally {
+            this.isGeneratingTweet = false;
         }
     }
 
@@ -1424,6 +1473,13 @@ export class TwitterPostClient {
                     pendingTweet.newTweetContent,
                     this.twitterUsername
                 );
+                // Update last post timestamp after successful tweet
+                await this.runtime.cacheManager.set(
+                    `twitter/${this.twitterUsername}/lastPost`,
+                    {
+                        timestamp: Date.now()
+                    }
+                );
 
                 // Notify on Discord about posting
                 try {
@@ -1473,6 +1529,35 @@ export class TwitterPostClient {
             }
         }
     }
+
+    private async processRepository(repo: any): Promise<boolean> {
+        const coveredFile = '/root/pumpfun-ai-agent/osncovered.txt';
+
+        // Read already covered repositories
+        let coveredRepos: string[] = [];
+        try {
+            if (fs.existsSync(coveredFile)) {
+                coveredRepos = fs.readFileSync(coveredFile, 'utf-8')
+                    .split('\n')
+                    .filter(line => line.trim() !== '');
+            } else {
+                // Create the file if it doesn't exist
+                fs.writeFileSync(coveredFile, '', 'utf-8');
+            }
+
+            const url = repo.url;
+            if (!coveredRepos.includes(url)) {
+                // Add to covered repositories
+                fs.appendFileSync(coveredFile, url + '\n');
+                return true;
+            }
+        } catch (error) {
+            elizaLogger.error(`Error processing covered repositories file: ${error}`);
+            // If there's an error, treat as new repository to ensure we don't miss tweets
+            return true;
+        }
+        return false;
+    }
 }
 
 async function getOpenSource(): Promise<{ url: string; desc: string, readmetxt: string }> {
@@ -1480,7 +1565,7 @@ async function getOpenSource(): Promise<{ url: string; desc: string, readmetxt: 
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:11.0) Gecko/20100101 Firefox/11.0',
     };
 
-    const coveredFile = '/root/osn-ai-agent/osncovered.txt';
+    const coveredFile = '/root/pumpfun-ai-agent/osncovered.txt';
     const GITHUB_TOPIC_HASH = "0xe5300b36813400e3d9efc72e094a9327e1ac12fb98b3ddc76be34284d3799796";
 
     // Read already covered repositories

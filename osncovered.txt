@@ -70,3 +70,11 @@ https://github.com/zaidmukaddam/scira
 https://github.com/Zipstack/unstract
 https://github.com/Zipstack/unstract
 https://github.com/Zipstack/unstract
+https://github.com/microsoft/OmniParser
+https://github.com/danielmiessler/fabric
+https://github.com/harry0703/MoneyPrinterTurbo
+https://github.com/unionlabs/union
+https://github.com/docmost/docmost
+https://github.com/cordx56/rustowl
+https://github.com/FujiwaraChoki/MoneyPrinterV2
+https://github.com/exo-explore/exo
